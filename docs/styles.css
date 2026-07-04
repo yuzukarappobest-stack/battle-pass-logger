@@ -183,7 +183,7 @@ button:active {
 
 .graph-panel {
   grid-area: graph;
-  min-height: 330px;
+  min-height: 525px;
 }
 
 .log-panel {
@@ -260,7 +260,7 @@ canvas {
 }
 
 #powerGraph {
-  height: 280px;
+  height: 476px;
 }
 
 .anomaly {
@@ -315,6 +315,6 @@ canvas {
   }
 
   #powerGraph {
-    height: 260px;
+    height: 442px;
   }
 }

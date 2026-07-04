@@ -9,6 +9,7 @@ const state = {
   device: null,
   server: null,
   notifyCharacteristic: null,
+  wakeLock: null,
   logs: [],
   results: [],
   powerValues: [],
@@ -31,6 +32,7 @@ const els = {
   statusText: document.querySelector("#statusText"),
   deviceName: document.querySelector("#deviceName"),
   connectionState: document.querySelector("#connectionState"),
+  wakeLockState: document.querySelector("#wakeLockState"),
   shootPower: document.querySelector("#shootPower"),
   realRpm: document.querySelector("#realRpm"),
   resultRows: document.querySelector("#resultRows"),
@@ -47,7 +49,11 @@ els.clearButton.addEventListener("click", clearMeasurement);
 els.csvButton.addEventListener("click", saveCsv);
 els.launcherSelect.addEventListener("change", updateRealRpm);
 window.addEventListener("resize", drawAll);
+document.addEventListener("visibilitychange", handleVisibilityChange);
+document.addEventListener("pointerdown", requestWakeLock, { once: true });
+document.addEventListener("keydown", requestWakeLock, { once: true });
 
+initWakeLock();
 render();
 
 async function connect() {
@@ -64,6 +70,7 @@ async function connect() {
   }
 
   try {
+    await requestWakeLock();
     setConnection("スキャン中...");
     const options = els.pairingHint.checked
       ? {
@@ -111,6 +118,48 @@ async function disconnect() {
     }
   } finally {
     handleDisconnected();
+  }
+}
+
+function initWakeLock() {
+  if (!("wakeLock" in navigator)) {
+    setWakeLockState("非対応");
+    return;
+  }
+  setWakeLockState("待機中");
+}
+
+async function requestWakeLock() {
+  if (!("wakeLock" in navigator)) {
+    setWakeLockState("非対応");
+    return;
+  }
+  if (document.visibilityState !== "visible") {
+    return;
+  }
+  if (state.wakeLock) {
+    setWakeLockState("抑止中");
+    return;
+  }
+
+  try {
+    state.wakeLock = await navigator.wakeLock.request("screen");
+    state.wakeLock.addEventListener("release", handleWakeLockReleased);
+    setWakeLockState("抑止中");
+  } catch (error) {
+    console.error(error);
+    setWakeLockState("取得失敗");
+  }
+}
+
+function handleWakeLockReleased() {
+  state.wakeLock = null;
+  setWakeLockState(document.visibilityState === "visible" ? "解除済み" : "一時解除");
+}
+
+function handleVisibilityChange() {
+  if (document.visibilityState === "visible") {
+    requestWakeLock();
   }
 }
 
@@ -601,6 +650,10 @@ function setStatus(text) {
 function setConnection(text) {
   els.connectionState.textContent = text;
   els.statusText.textContent = `接続状態: ${text}`;
+}
+
+function setWakeLockState(text) {
+  els.wakeLockState.textContent = text;
 }
 
 function trimArray(array, maxLength) {
