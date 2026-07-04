@@ -214,7 +214,7 @@ function appendPacket(kind, bytes) {
       state.anomalyFlags.push(anomaly);
     }
 
-    const normalPowers = normalPowerValuesInRange(4, 15);
+    const normalPowers = normalPowerValuesInRange(4, 15, state.measurementLauncher);
     const currentPower = normalPowers.length ? Math.max(...normalPowers) : null;
     if (currentPower !== null && (state.bestPower === null || currentPower > state.bestPower)) {
       state.bestPower = currentPower;
@@ -302,72 +302,91 @@ function le16Values(bytes) {
 
 function isAnomalyPower(power) {
   if (!state.powerValues.length) return false;
-  return Math.abs(power - state.powerValues[state.powerValues.length - 1]) >= ANOMALY_POWER_JUMP;
+  const launcherKey = currentLauncherKey();
+  const previousPower = state.powerValues[state.powerValues.length - 1];
+  const isEarlyWinderDecrease = launcherKey === "winder" && state.powerValues.length < 5 && power < previousPower;
+  if (isEarlyWinderDecrease) return false;
+  const referencePower = previousNormalRawPowerBefore(state.powerValues.length);
+  if (referencePower === null) return false;
+  return Math.abs(power - referencePower) >= ANOMALY_POWER_JUMP;
 }
 
-function normalPowerValuesInRange(startIndex, endIndex) {
-  const values = [];
-  for (let index = startIndex; index <= endIndex; index += 1) {
-    const offset = index - 1;
-    if (offset < state.powerValues.length && !state.anomalyFlags[offset]) {
-      values.push(state.powerValues[offset]);
+function currentLauncherKey(launcher = null) {
+  return launcher || state.measurementLauncher || els.launcherSelect.value;
+}
+
+function measurementStartOffset(launcherKey = currentLauncherKey()) {
+  if (launcherKey !== "winder") return 0;
+
+  let startOffset = 0;
+  const scanLimit = Math.min(5, state.powerValues.length);
+  for (let offset = 1; offset < scanLimit; offset += 1) {
+    const previousPower = normalRawPowerAt(offset - 1);
+    const power = normalRawPowerAt(offset);
+    if (previousPower !== null && power !== null && power < previousPower) {
+      startOffset = offset;
     }
   }
-  return values;
+  return startOffset;
 }
 
-function normalPowerAt(index) {
-  const offset = index - 1;
+function normalRawPowerAt(offset) {
   if (offset < 0 || offset >= state.powerValues.length) return null;
   if (state.anomalyFlags[offset]) return null;
   return state.powerValues[offset];
 }
 
+function previousNormalRawPowerBefore(offset, minOffset = 0) {
+  for (let previousOffset = offset - 1; previousOffset >= minOffset; previousOffset -= 1) {
+    const power = normalRawPowerAt(previousOffset);
+    if (power !== null) return power;
+  }
+  return null;
+}
+
+function powerAtRotation(index, launcher = null, fallbackOnAnomaly = false) {
+  const launcherKey = currentLauncherKey(launcher);
+  const startOffset = measurementStartOffset(launcherKey);
+  const offset = startOffset + index - 1;
+  const power = normalRawPowerAt(offset);
+  if (power !== null) return power;
+
+  if (fallbackOnAnomaly && offset >= startOffset && state.anomalyFlags[offset]) {
+    return previousNormalRawPowerBefore(offset, startOffset);
+  }
+  return null;
+}
+
+function normalPowerValuesInRange(startIndex, endIndex, launcher = null) {
+  const values = [];
+  for (let index = startIndex; index <= endIndex; index += 1) {
+    const power = powerAtRotation(index, launcher);
+    if (power !== null) values.push(power);
+  }
+  return values;
+}
+
+function normalPowerAt(index, launcher = null) {
+  return powerAtRotation(index, launcher);
+}
+
 function calculateRealRpm(launcher = null) {
   if (!state.powerValues.length) return null;
-  const launcherKey = launcher || state.measurementLauncher || els.launcherSelect.value;
+  const launcherKey = currentLauncherKey(launcher);
 
   if (launcherKey === "winder") {
-    const basePower = calculatePeakBeforeDrop(8);
+    const candidates = [powerAtRotation(8, launcherKey, true), powerAtRotation(9, launcherKey, true)].filter(
+      (power) => power !== null,
+    );
+    const basePower = candidates.length ? Math.max(...candidates) : null;
     if (basePower === null) return null;
     return { value: Math.round(basePower), label: "ワインダー", basePower };
   }
 
-  let basePower = normalPowerAt(11);
-  if (basePower === null) basePower = normalPowerAt(10);
+  let basePower = powerAtRotation(11, launcherKey, true);
+  if (basePower === null) basePower = powerAtRotation(10, launcherKey, true);
   if (basePower === null) return null;
   return { value: Math.round(basePower * 0.95), label: "ストリング", basePower };
-}
-
-function calculatePeakBeforeDrop(startIndex) {
-  let previousPower = null;
-  let previousIncrease = null;
-
-  for (let index = startIndex; index <= state.powerValues.length; index += 1) {
-    const power = normalPowerAt(index);
-    if (power === null) continue;
-
-    if (previousPower === null) {
-      previousPower = power;
-      continue;
-    }
-
-    if (power < previousPower) {
-      return previousPower;
-    }
-
-    const increase = power - previousPower;
-    if (previousIncrease !== null && increase > 0 && increase >= previousIncrease * 1.2) {
-      return previousPower;
-    }
-
-    if (increase > 0) {
-      previousIncrease = increase;
-    }
-    previousPower = power;
-  }
-
-  return previousPower;
 }
 
 function saveCurrentResult() {
