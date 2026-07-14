@@ -302,6 +302,8 @@ function le16Values(bytes) {
 
 function isAnomalyPower(power) {
   if (!state.powerValues.length) return false;
+  const rotationIndex = state.powerValues.length + 1;
+  if (rotationIndex <= 4) return false;
   const launcherKey = currentLauncherKey();
   const previousPower = state.powerValues[state.powerValues.length - 1];
   const isEarlyWinderDecrease = launcherKey === "winder" && state.powerValues.length < 5 && power < previousPower;
