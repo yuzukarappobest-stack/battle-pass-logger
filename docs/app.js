@@ -18,6 +18,7 @@ const state = {
   measurementLauncher: null,
   battlePassValue: null,
   previousBattlePassValue: null,
+  selectedResultIndex: null,
 };
 
 const els = {
@@ -25,6 +26,8 @@ const els = {
   disconnectButton: document.querySelector("#disconnectButton"),
   clearButton: document.querySelector("#clearButton"),
   csvButton: document.querySelector("#csvButton"),
+  csvLoadButton: document.querySelector("#csvLoadButton"),
+  csvFileInput: document.querySelector("#csvFileInput"),
   serviceUuid: document.querySelector("#serviceUuid"),
   notifyUuid: document.querySelector("#notifyUuid"),
   pairingHint: document.querySelector("#pairingHint"),
@@ -47,6 +50,9 @@ els.connectButton.addEventListener("click", connect);
 els.disconnectButton.addEventListener("click", disconnect);
 els.clearButton.addEventListener("click", clearMeasurement);
 els.csvButton.addEventListener("click", saveCsv);
+els.csvLoadButton.addEventListener("click", () => els.csvFileInput.click());
+els.csvFileInput.addEventListener("change", loadCsv);
+els.resultRows.addEventListener("click", handleResultAction);
 els.launcherSelect.addEventListener("change", updateRealRpm);
 window.addEventListener("resize", drawAll);
 document.addEventListener("visibilitychange", handleVisibilityChange);
@@ -204,6 +210,7 @@ function appendPacket(kind, bytes) {
   trimArray(state.logs, 250);
 
   if (decoded.powers.length) {
+    state.selectedResultIndex = null;
     if (!state.measurementLauncher) {
       state.measurementLauncher = els.launcherSelect.value;
     }
@@ -403,6 +410,8 @@ function saveCurrentResult() {
     launcherLabel: realRpm.label,
     maxPower: state.bestPower,
     realRpm: realRpm.value,
+    powerValues: [...state.powerValues],
+    anomalyFlags: [...state.anomalyFlags],
   });
   trimArray(state.results, 100);
 }
@@ -421,6 +430,7 @@ function resetMeasurement() {
 function clearMeasurement() {
   resetMeasurement();
   state.results = [];
+  state.selectedResultIndex = null;
   render();
 }
 
@@ -441,6 +451,12 @@ function render() {
 }
 
 function renderScores() {
+  const selected = selectedResult();
+  if (selected) {
+    els.shootPower.textContent = selected.maxPower;
+    els.realRpm.textContent = `${selected.realRpm} rpm (${selected.launcherLabel})`;
+    return;
+  }
   els.shootPower.textContent = state.bestPower ?? "-";
   const realRpm = calculateRealRpm();
   els.realRpm.textContent = realRpm ? `${realRpm.value} rpm (${realRpm.label})` : "-";
@@ -449,15 +465,22 @@ function renderScores() {
 function renderResults() {
   els.resultRows.innerHTML = state.results
     .map(
-      (row) => `<tr><td>${escapeHtml(row.time)}</td><td>${escapeHtml(row.launcherLabel)}</td><td>${row.maxPower}</td><td>${row.realRpm}</td></tr>`,
+      (row, index) => `<tr class="result-row${index === state.selectedResultIndex ? " is-selected" : ""}">
+        <td>${escapeHtml(row.time)}</td>
+        <td>${escapeHtml(row.launcherLabel)}</td>
+        <td>${row.maxPower}</td>
+        <td>${row.realRpm}</td>
+        <td><button class="detail-button" type="button" data-result-index="${index}">表示</button></td>
+      </tr>`,
     )
     .join("");
 }
 
 function renderPowerRows() {
-  els.powerRows.innerHTML = state.powerValues
+  const { powerValues, anomalyFlags } = displayedPowerData();
+  els.powerRows.innerHTML = powerValues
     .map((power, index) => {
-      const anomaly = state.anomalyFlags[index];
+      const anomaly = anomalyFlags[index];
       const text = anomaly ? `${power} ※異常値` : String(power);
       return `<tr><td>${index + 1}回転目</td><td class="${anomaly ? "anomaly" : ""}">${text}</td></tr>`;
     })
@@ -493,7 +516,8 @@ function drawPowerGraph() {
   const bottom = 30;
   const graphWidth = width - left - right;
   const graphHeight = height - top - bottom;
-  const values = state.powerValues.slice(0, 20);
+  const displayed = displayedPowerData();
+  const values = displayed.powerValues.slice(0, 20);
 
   if (!values.length) {
     drawCenteredText(ctx, width, height, "1-20回転目のデータ待ち");
@@ -523,13 +547,13 @@ function drawPowerGraph() {
   });
   ctx.stroke();
 
-  const normalPoints = points.filter((point) => point.index >= 4 && point.index <= 15 && !state.anomalyFlags[point.index - 1]);
+  const normalPoints = points.filter((point) => point.index >= 4 && point.index <= 15 && !displayed.anomalyFlags[point.index - 1]);
   const maxPoint = normalPoints.length
     ? normalPoints.reduce((best, point) => (point.value > best.value ? point : best), normalPoints[0])
     : points.reduce((best, point) => (point.value > best.value ? point : best), points[0]);
 
   for (const point of points) {
-    const anomaly = state.anomalyFlags[point.index - 1];
+    const anomaly = displayed.anomalyFlags[point.index - 1];
     const reference = [8, 9, 11, 12].includes(point.index);
     const isMax = point.index === maxPoint.index;
     ctx.fillStyle = anomaly ? "#9e9e9e" : isMax ? "#f2b705" : "#1769aa";
@@ -635,9 +659,16 @@ function circle(ctx, x, y, radius) {
 }
 
 function saveCsv() {
-  const rows = [["time", "launcher", "sp", "real_rpm"]];
+  const rows = [["time", "launcher", "sp", "real_rpm", "power_values", "anomaly_flags"]];
   for (const result of state.results) {
-    rows.push([result.time, result.launcherLabel, result.maxPower, result.realRpm]);
+    rows.push([
+      result.time,
+      result.launcherLabel,
+      result.maxPower,
+      result.realRpm,
+      JSON.stringify(result.powerValues || []),
+      JSON.stringify(result.anomalyFlags || []),
+    ]);
   }
   const csv = rows.map((row) => row.map(csvCell).join(",")).join("\n");
   const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
@@ -647,6 +678,171 @@ function saveCsv() {
   link.download = `battle-pass-${new Date().toISOString().replace(/[:.]/g, "-")}.csv`;
   link.click();
   URL.revokeObjectURL(url);
+}
+
+async function loadCsv(event) {
+  const file = event.target.files?.[0];
+  event.target.value = "";
+  if (!file) return;
+
+  try {
+    const records = parseShootCsv(await file.text());
+    state.results = records.slice(0, 100);
+    state.selectedResultIndex = state.results.length ? 0 : null;
+    setStatus(`CSVから${state.results.length}件のシュートデータを読み込みました。`);
+    render();
+  } catch (error) {
+    console.error(error);
+    setStatus(`CSV読込失敗: ${error.message}`);
+  }
+}
+
+function parseShootCsv(text) {
+  const rows = parseCsvRows(text.replace(/^\uFEFF/, "")).filter((row) => row.some((cell) => cell.trim()));
+  if (rows.length < 2) throw new Error("シュートデータがありません。");
+
+  const headers = rows[0].map(normalizeCsvHeader);
+  const columns = {
+    time: findCsvColumn(headers, ["time", "時刻"]),
+    launcher: findCsvColumn(headers, ["launcher", "ランチャー"]),
+    sp: findCsvColumn(headers, ["sp", "シュートパワー"]),
+    realRpm: findCsvColumn(headers, ["realrpm", "実回転数", "推定実回転数"]),
+    powerValues: findCsvColumn(headers, ["powervalues", "回転別sp", "各回転sp"]),
+    anomalyFlags: findCsvColumn(headers, ["anomalyflags", "異常値"]),
+  };
+  if ([columns.time, columns.launcher, columns.sp, columns.realRpm].some((column) => column < 0)) {
+    throw new Error("time、launcher、sp、real_rpm列が必要です。");
+  }
+
+  const records = [];
+  for (const row of rows.slice(1)) {
+    const maxPower = parsePositiveNumber(row[columns.sp]);
+    const realRpm = parsePositiveNumber(row[columns.realRpm]);
+    const launcher = normalizeLauncher(row[columns.launcher]);
+    if (!maxPower || !realRpm || !launcher) continue;
+
+    const powerValues = columns.powerValues >= 0 ? parseNumberArray(row[columns.powerValues]) : [];
+    const anomalyFlags = columns.anomalyFlags >= 0 ? parseBooleanArray(row[columns.anomalyFlags], powerValues.length) : [];
+    records.push({
+      time: String(row[columns.time] || "-"),
+      launcherKey: launcher.key,
+      launcherLabel: launcher.label,
+      maxPower,
+      realRpm,
+      powerValues,
+      anomalyFlags,
+    });
+  }
+  if (!records.length) throw new Error("有効なシュートデータを読み取れませんでした。");
+  return records;
+}
+
+function parseCsvRows(text) {
+  const rows = [];
+  let row = [];
+  let cell = "";
+  let quoted = false;
+
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index];
+    if (quoted) {
+      if (character === '"' && text[index + 1] === '"') {
+        cell += '"';
+        index += 1;
+      } else if (character === '"') {
+        quoted = false;
+      } else {
+        cell += character;
+      }
+    } else if (character === '"') {
+      quoted = true;
+    } else if (character === ",") {
+      row.push(cell);
+      cell = "";
+    } else if (character === "\n") {
+      row.push(cell.replace(/\r$/, ""));
+      rows.push(row);
+      row = [];
+      cell = "";
+    } else {
+      cell += character;
+    }
+  }
+  if (quoted) throw new Error("CSVの引用符が閉じていません。");
+  if (cell || row.length) {
+    row.push(cell.replace(/\r$/, ""));
+    rows.push(row);
+  }
+  return rows;
+}
+
+function normalizeCsvHeader(value) {
+  return String(value).trim().toLowerCase().replaceAll(/[_\s-]/g, "");
+}
+
+function findCsvColumn(headers, names) {
+  return headers.findIndex((header) => names.includes(header));
+}
+
+function parsePositiveNumber(value) {
+  const number = Number(String(value ?? "").replaceAll(",", "").trim());
+  return Number.isFinite(number) && number > 0 ? Math.round(number) : null;
+}
+
+function normalizeLauncher(value) {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (normalized === "winder" || normalized === "ワインダー") return { key: "winder", label: "ワインダー" };
+  if (normalized === "string" || normalized === "ストリング") return { key: "string", label: "ストリング" };
+  return null;
+}
+
+function parseNumberArray(value) {
+  if (!String(value ?? "").trim()) return [];
+  try {
+    const parsed = JSON.parse(value);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map(parsePositiveNumber).filter((number) => number !== null).slice(0, 20);
+  } catch (_) {
+    return String(value)
+      .replaceAll(/[\[\]]/g, "")
+      .split(/[;|\s]+/)
+      .map(parsePositiveNumber)
+      .filter((number) => number !== null)
+      .slice(0, 20);
+  }
+}
+
+function parseBooleanArray(value, length) {
+  try {
+    const parsed = JSON.parse(value);
+    if (Array.isArray(parsed)) return parsed.slice(0, length).map(Boolean);
+  } catch (_) {
+    // Old or manually edited CSVs may not contain JSON arrays.
+  }
+  return Array.from({ length }, () => false);
+}
+
+function handleResultAction(event) {
+  const button = event.target.closest("[data-result-index]");
+  if (!button) return;
+  const index = Number(button.dataset.resultIndex);
+  if (!Number.isInteger(index) || !state.results[index]) return;
+  state.selectedResultIndex = index;
+  render();
+}
+
+function selectedResult() {
+  if (state.selectedResultIndex === null) return null;
+  return state.results[state.selectedResultIndex] || null;
+}
+
+function displayedPowerData() {
+  const selected = selectedResult();
+  if (!selected) return { powerValues: state.powerValues, anomalyFlags: state.anomalyFlags };
+  return {
+    powerValues: selected.powerValues || [],
+    anomalyFlags: selected.anomalyFlags || [],
+  };
 }
 
 function csvCell(value) {

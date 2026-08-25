@@ -17,7 +17,9 @@
         <button id="connectButton" type="button" class="primary">接続</button>
         <button id="disconnectButton" type="button">切断</button>
         <button id="clearButton" type="button">クリア</button>
+        <button id="csvLoadButton" type="button">CSV読込</button>
         <button id="csvButton" type="button">CSV保存</button>
+        <input id="csvFileInput" class="visually-hidden" type="file" accept=".csv,text/csv" />
       </div>
     </header>
 
@@ -86,6 +88,7 @@
                 <th>ランチャー</th>
                 <th>SP</th>
                 <th>実回転数</th>
+                <th>詳細</th>
               </tr>
             </thead>
             <tbody id="resultRows"></tbody>
